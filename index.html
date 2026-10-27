@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>View From Your Seat</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; }
+    canvas { display: block; }
+
+    #info {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: white;
+      font-family: sans-serif;
+      font-size: 16px;
+      background: rgba(0,0,0,0.6);
+      padding: 10px 20px;
+      border-radius: 8px;
+      text-align: center;
+    }
+
+    #backBtn {
+      position: absolute;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 12px 28px;
+      background: #e63946;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      cursor: pointer;
+      display: none;
+      font-family: sans-serif;
+    }
+
+    #backBtn:hover {
+      background: #c1121f;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="info">Select a seat </div>
+  <button id="backBtn"> <-- Select a different seat </button>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111);
+
+    const camera = new THREE.PerspectiveCamera(
+      75,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      1000
+    );
+
+    
+    const overviewPosition = new THREE.Vector3(0, 8, 18);
+    const overviewTarget = new THREE.Vector3(0, 0, 0);
+
+    camera.position.copy(overviewPosition);
+    camera.lookAt(overviewTarget);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.copy(overviewTarget);
+    controls.update();
+
+   
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+    dirLight.position.set(0, 20, 10);
+    scene.add(dirLight);
+
+    
+    const screenGeometry = new THREE.PlaneGeometry(16, 7);
+    const textureLoader = new THREE.TextureLoader();
+    const screenMaterial = new THREE.MeshStandardMaterial({ map: textureLoader.load('https://www.sciencenews.org/wp-content/uploads/sites/2/2022/11/top-sapce-images_feat.jpg') });
+    const screen = new THREE.Mesh(screenGeometry, screenMaterial);
+    screen.position.set(0, 4, -10);
+    scene.add(screen);
+
+  
+    const screenCenter = new THREE.Vector3(0, 4, -10);
+
+    //border
+    const borderBoxGeometry = new THREE.PlaneGeometry(16.4, 7.4);
+    const borderBoxMaterial = new THREE.MeshStandardMaterial({color: 0xffffcc});
+    const borderBox = new THREE.Mesh(borderBoxGeometry, borderBoxMaterial);
+    borderBox.position.set(0, 4, -10.01);
+    scene.add(borderBox);
+
+    // --- FLOOR ---
+    const floorGeometry = new THREE.PlaneGeometry(20, 30);
+    const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 });
+    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set(0, 0, 2);
+    scene.add(floor);
+
+    // --- SEATS ---
+    const seatGeometry = new THREE.BoxGeometry(0.8, 0.5, 0.8);
+    const rows = 6;
+    const seatsPerRow = 10;
+    const seatSpacingX = 1.5;
+    const seatSpacingZ = 1.8;
+
+    const seats = [];
+
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < seatsPerRow; col++) {
+
+        const seatMaterial = new THREE.MeshStandardMaterial({ color: 0x8B0000 });
+        const seat = new THREE.Mesh(seatGeometry, seatMaterial);
+
+        const x = (col - seatsPerRow / 2) * seatSpacingX + 0.75;
+        const y = row * 0.3 + 0.25;
+        const z = row * seatSpacingZ - 2;
+
+        seat.position.set(x, y, z);
+        seat.userData = { row: row + 1, col: col + 1 };
+
+        scene.add(seat);
+        seats.push(seat);
+      }
+    }
+
+    // --- CAMERA ANIMATION ---
+    let isAnimating = false;
+    let animationProgress = 0;
+    let startPosition = new THREE.Vector3();
+    let targetPosition = new THREE.Vector3();
+    let startTarget = new THREE.Vector3();
+    let endTarget = new THREE.Vector3();
+    let inSeatView = false;
+    let selectedSeat = null;
+
+    function moveCameraTo(position, lookAtTarget) {
+      // save where we're starting from
+      startPosition.copy(camera.position);
+      startTarget.copy(controls.target);
+
+      // save where we want to go
+      targetPosition.copy(position);
+      endTarget.copy(lookAtTarget);
+
+      // start the animation
+      animationProgress = 0;
+      isAnimating = true;
+    }
+
+    // smooth easing function — makes movement feel natural, not robotic
+    function easeInOut(t) {
+      return t < 0.5
+        ? 2 * t * t
+        : -1 + (4 - 2 * t) * t;
+    }
+
+    // --- CLICK DETECTION ---
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    window.addEventListener('click', (event) => {
+      // ignore clicks when already in seat view or animating
+      if (inSeatView || isAnimating) return;
+
+      mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(seats);
+
+      if (intersects.length > 0) {
+        const clickedSeat = intersects[0].object;
+
+        // deselect previous
+        if (selectedSeat) {
+          selectedSeat.material.color.set(0x8B0000);
+        }
+
+        // highlight selected seat
+        clickedSeat.material.color.set(0x00cc44);
+        selectedSeat = clickedSeat;
+
+        const { row, col } = clickedSeat.userData;
+
+        // camera goes to slightly above and behind the seat, looking at screen
+        const seatPos = clickedSeat.position;
+        const eyePosition = new THREE.Vector3(
+          seatPos.x,
+          seatPos.y + 1.2, // eye level above the seat
+          seatPos.z + 0.3  // just behind the seat
+        );
+
+        // update UI
+        document.getElementById('info').textContent =
+          `Row ${row}, Seat ${col} — Here's your view!`;
+        document.getElementById('backBtn').style.display = 'block';
+
+        // disable orbit controls during seat view
+        controls.enabled = false;
+        inSeatView = true;
+
+        // trigger camera movement
+        moveCameraTo(eyePosition, screenCenter);
+      }
+    });
+
+    // --- BACK BUTTON ---
+    document.getElementById('backBtn').addEventListener('click', () => {
+      // reset selected seat color
+      if (selectedSeat) {
+        selectedSeat.material.color.set(0x8B0000);
+        selectedSeat = null;
+      }
+
+      // update UI
+      document.getElementById('info').textContent = 'Click a seat to see the view from it';
+      document.getElementById('backBtn').style.display = 'none';
+
+      // move camera back to overview
+      moveCameraTo(overviewPosition, overviewTarget);
+
+      inSeatView = false;
+      controls.enabled = true;
+    });
+
+    // --- ANIMATION LOOP ---
+    function animate() {
+      requestAnimationFrame(animate);
+
+      // handle smooth camera movement
+      if (isAnimating) {
+        animationProgress += 0.02; // speed of movement (lower = slower)
+
+        if (animationProgress >= 1) {
+          animationProgress = 1;
+          isAnimating = false;
+        }
+
+        const eased = easeInOut(animationProgress);
+
+        // interpolate camera position between start and target
+        camera.position.lerpVectors(startPosition, targetPosition, eased);
+
+        // interpolate where camera is looking
+        controls.target.lerpVectors(startTarget, endTarget, eased);
+      }
+
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // --- RESIZE ---
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+  </script>
+</body>
+</html>
